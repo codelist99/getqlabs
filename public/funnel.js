@@ -13,15 +13,22 @@
       location.href = data.next;
     } catch (error) { alert(error.message); }
   };
+  const handleDestination = href => {
+    if (!isJvzoo(href)) return false;
+    if (product === 'front') location.href = '/checkout?product=front';
+    else purchase(product + (isDiscount(href) ? '_downsell' : ''));
+    return true;
+  };
+  const nativeOpen = window.open.bind(window);
+  window.open = (url, ...args) => handleDestination(String(url || '')) ? null : nativeOpen(url, ...args);
   document.addEventListener('click', event => {
-    const anchor = event.target.closest('a');
+    const anchor = event.composedPath().find(node => node?.tagName === 'A') || event.target.closest?.('a');
     if (!anchor) return;
     const href = anchor.getAttribute('href') || '';
     if (!isJvzoo(href)) return;
     event.preventDefault();
     event.stopImmediatePropagation();
-    if (product === 'front') location.href = '/checkout?product=front';
-    else purchase(product + (isDiscount(href) ? '_downsell' : ''));
+    handleDestination(href);
   }, true);
   const normalize = () => document.querySelectorAll('a[href]').forEach(anchor => {
     const href = anchor.getAttribute('href') || '';
