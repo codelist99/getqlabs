@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const pages = ['fe','oto1','oto2','oto3','oto4','oto5','oto6','oto7','pp','terms','refund','compliance','earnings'];
+const jvzooProducts = { oto1:'442445', oto2:'442447', oto3:'442451', oto4:'452707', oto5:'452709', oto6:'452711', oto7:'452713' };
+const discounts = { oto1:'GET100OFF', oto2:'GET50OFF', oto3:'GET30OFF', oto4:'GET30OFF', oto5:'GET100OFF', oto6:'GET50OFF', oto7:'GET100OFF' };
 
 function funnelScript(product) {
   return `<script>window.QL_PRODUCT=${JSON.stringify(product)};</script><script src="/assets/funnel.js" defer></script><script src="/assets/tracker.js" defer></script>`;
@@ -14,6 +16,10 @@ for (const route of pages) {
   if (!response.ok) throw new Error(`${route}: ${response.status}`);
   let html = await response.text();
   const product = route === 'fe' ? 'front' : route;
+  if (jvzooProducts[route]) {
+    const base = `https:\\u002F\\u002Fwww.jvzoo.com\\u002Fb\\u002F116973\\u002F${jvzooProducts[route]}\\u002F99`;
+    html = html.replaceAll(`${base}?coupon=${discounts[route]}`, `/buy/${product}_downsell`).replaceAll(base, `/buy/${product}`);
+  }
   html = html
     .replaceAll('https://getqlabs.com/', '/')
     .replaceAll('https:\\u002F\\u002Fgetqlabs.com\\u002F', '\\u002F')
