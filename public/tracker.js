@@ -11,7 +11,7 @@
       if (document.querySelector('.wc-call-now')) return;
       const callout = document.createElement('section');
       callout.className = 'wc-call-now';
-      callout.innerHTML = '<div><h1>Congratulations</h1><p class="thanks">Thanks for purchasing WifiCode</p><strong>YOUR ORDER IS COMPLETE</strong><h2>Step 1: Call Our Office Now To Get Started</h2><a class="phone" href="tel:+12067032153">(206) 703-2153</a><p>Tap the number or call now so our team can help you get started.</p><div class="or">— OR —</div><a class="schedule" href="'+bookingUrl+'" target="_blank" rel="noreferrer noopener">Schedule Your Onboarding Call</a></div>';
+      callout.innerHTML = '<div><h1>Congratulations</h1><p class="thanks">Thanks for purchasing Q Labs</p><strong>YOUR ORDER IS COMPLETE</strong><h2>Step 1: Call Our Office Now To Get Started</h2><a class="phone" href="tel:+12067032153">(206) 703-2153</a><p>Tap the number or call now so our team can help you get started.</p><div class="or">— OR —</div><a class="schedule" href="'+bookingUrl+'" target="_blank" rel="noreferrer noopener">Schedule Your Onboarding Call</a></div>';
       document.body.prepend(callout);
     };
     if (!document.getElementById('wc-call-now-style')) {
@@ -30,7 +30,7 @@
   const params = new URLSearchParams(location.search);
   const attribution = Object.fromEntries(['aid','tid','utm_source','utm_campaign'].map(key => [key, params.get(key) || localStorage.getItem(`wc_${key}`) || '']));
   Object.entries(attribution).forEach(([key,value]) => value && localStorage.setItem(`wc_${key}`, value));
-  let sessionId=sessionStorage.getItem('wc_session_id');if(!sessionId){sessionId=globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random().toString(36).slice(2)}`;sessionStorage.setItem('wc_session_id',sessionId)}
+  let sessionId=sessionStorage.getItem('ql_session_id');if(!sessionId){sessionId=globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random().toString(36).slice(2)}`;sessionStorage.setItem('ql_session_id',sessionId)}
   const device=innerWidth<768?'Mobile':innerWidth<1100?'Tablet':'Desktop',context={...attribution,session_id:sessionId,device};
   const send = (url, data) => fetch(url, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(data), keepalive:true }).catch(()=>{});
   send('/api/events', { type:'page_view', page:location.pathname, ...context });
