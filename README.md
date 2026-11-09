@@ -1,6 +1,6 @@
 # Get Q Labs
 
-Independent Get Q Labs sales funnel, Authorize.Net checkout, one-click upgrade flow, reporting database, and campaign admin.
+Independent Get Q Labs sales funnel, NMI checkout, one-click upgrade flow, reporting database, and campaign admin.
 
 ## Funnel
 
@@ -20,7 +20,7 @@ The original page videos remain hosted by the source video provider. Checkout an
 
 ## Infrastructure
 
-- Payments: Authorize.Net Accept.js and Customer Profiles for one-click upgrades.
+- Payments: NMI Collect.js and Customer Vault for new checkouts and one-click upgrades. Historical Authorize.Net profiles and refunds remain supported.
 - Database: a dedicated Neon Postgres database configured through this project's `DATABASE_URL`; it must not point to another offer's database.
 - Hosting: Vercel Node function through `api/index.mjs`.
 - Admin: `/admin`, PIN `67`; protected lead data PIN `0720`.
