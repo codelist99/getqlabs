@@ -660,12 +660,7 @@ async function loadAll() {
             `<p><span class="badge">${esc(a.channel)}</span> ${esc(a.name)} · ${a.delay_minutes}m · ${a.enabled ? "On" : "Off"}</p>`,
         )
         .join("") || '<p class="empty">No automations configured</p>';
-    await Promise.all([
-      loadOrders(),
-      loadLeads(),
-      loadSales(),
-      loadProfitLogistics(),
-    ]);
+    await Promise.all([loadOrders(), loadProfitLogistics()]);
     $("#updated").textContent =
       `Updated ${new Date().toLocaleTimeString()} · ${date(rep.range.start)} to ${date(rep.range.end)}`;
     toast("Campaign data refreshed");
@@ -685,6 +680,8 @@ $("#tabs").onclick = (e) => {
   b.classList.add("active");
   $(`#tab-${b.dataset.tab}`).classList.add("active");
   history.replaceState({}, "", `#${b.dataset.tab}`);
+  if (b.dataset.tab === "leads") loadLeads().catch((error) => toast(error.message));
+  if (b.dataset.tab === "buyers") loadSales().catch((error) => toast(error.message));
 };
 $("#preset").onchange = () => {
   const choosingRange = $("#preset").value === "range", today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
