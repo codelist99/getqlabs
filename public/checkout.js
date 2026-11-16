@@ -8,7 +8,7 @@ async function pay(response){
   if(processing)return;
   processing=true;$('error').textContent='';$('submit').disabled=true;$('submit').textContent='Securely processing…';
   try{
-    const payload={product:productId,paymentToken:response.token,first_name:$('firstName').value,last_name:$('lastName').value,email:$('email').value,phone:$('phone').value,address:$('address').value,city:$('city').value,state:$('state').value,zip:$('zip').value,country:'US',consent:$('consent').checked};
+    const payload={product:productId,paymentToken:response.token,website:$('website').value,first_name:$('firstName').value,last_name:$('lastName').value,email:$('email').value,phone:$('phone').value,address:$('address').value,city:$('city').value,state:$('state').value,zip:$('zip').value,country:'US',consent:$('consent').checked};
     const result=await fetch('/api/checkout',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)}),data=await result.json();
     if(!result.ok)throw Error(data.error||'Payment could not be completed');
     location.href=query.toString()?`${data.next}?${query}`:data.next;

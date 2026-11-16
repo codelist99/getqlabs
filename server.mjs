@@ -126,6 +126,38 @@ const memberAccount=async req=>{const session=readMemberSession(req);return sess
 const entitlements=async()=>['front','oto1','oto2','oto3','oto4','oto5','oto6','oto7'];
 
 async function body(req){const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>1e6)throw Error('Request too large');chunks.push(chunk)}const raw=Buffer.concat(chunks).toString(),type=req.headers['content-type']||'';return type.includes('application/json')?(raw?JSON.parse(raw):{}):Object.fromEntries(new URLSearchParams(raw))}
+const clientIp=req=>String(req.headers['x-forwarded-for']||req.socket?.remoteAddress||'').split(',')[0].trim().slice(0,100);
+const paymentIpHash=req=>{const ip=clientIp(req);return ip?createHmac('sha256',process.env.SESSION_SECRET||process.env.CRON_SECRET||'qlabs-payment-velocity').update(ip).digest('hex'):''};
+const checkoutValidationError=input=>{
+  if(String(input.website||'').trim())return 'Payment could not be completed';
+  const required=[input.first_name,input.last_name,input.email,input.phone,input.address,input.city,input.state,input.zip];
+  if(required.some(value=>!String(value||'').trim()))return 'Complete all contact and billing fields';
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(input.email)))return 'Enter a valid email address';
+  if(String(input.phone).replace(/\D/g,'').length<7)return 'Enter a valid phone number';
+  if(String(input.address).trim().length<5||String(input.city).trim().length<2)return 'Enter a valid billing address';
+  if(!/^[A-Za-z .'-]{2,30}$/.test(String(input.state).trim()))return 'Enter a valid billing state';
+  if(!/^\d{5}(?:-\d{4})?$/.test(String(input.zip).trim()))return 'Enter a valid billing ZIP code';
+  return '';
+};
+async function paymentGuard({leadId,ipHash}){
+  const counts=await one(`SELECT
+    COUNT(*) FILTER(WHERE $2<>'' AND ip_hash=$2 AND created_at>NOW()-INTERVAL '10 minutes')::int ip_attempts_10m,
+    COUNT(*) FILTER(WHERE $2<>'' AND ip_hash=$2 AND status='declined' AND created_at>NOW()-INTERVAL '20 minutes')::int ip_declines_20m,
+    COUNT(*) FILTER(WHERE $2<>'' AND ip_hash=$2 AND response_code='253' AND created_at>NOW()-INTERVAL '24 hours')::int ip_fraud_24h,
+    COUNT(*) FILTER(WHERE lead_id=$1 AND status='declined' AND created_at>NOW()-INTERVAL '30 minutes')::int lead_declines_30m,
+    COUNT(*) FILTER(WHERE lead_id=$1 AND response_code='253' AND created_at>NOW()-INTERVAL '24 hours')::int lead_fraud_24h
+    FROM payment_attempts WHERE created_at>NOW()-INTERVAL '24 hours'`,[leadId,ipHash]);
+  return Number(counts.lead_fraud_24h)>=1||Number(counts.ip_fraud_24h)>=2||Number(counts.lead_declines_30m)>=3||Number(counts.ip_declines_20m)>=4||Number(counts.ip_attempts_10m)>=8;
+}
+const startPaymentAttempt=async({leadId,orderId=null,product,ipHash})=>one(`INSERT INTO payment_attempts(lead_id,order_id,gateway,product_id,amount,status,ip_hash) VALUES($1,$2,'nmi',$3,$4,'started',$5) RETURNING id`,[leadId,orderId,product.id,product.amount,ipHash]);
+const finishPaymentAttempt=(id,status,code='',message='')=>run(`UPDATE payment_attempts SET status=$1,response_code=$2,response_message=$3,updated_at=NOW() WHERE id=$4`,[status,String(code||'').slice(0,40),String(message||'').slice(0,500),id]);
+const publicDeclineMessage=(code,message)=>{
+  if(String(code)==='202')return 'The card has insufficient funds. Please use a different payment method.';
+  if(String(code)==='223')return 'The card is expired. Please use a different payment method.';
+  if(String(code)==='225')return 'The security code did not match. Check the CVV and try again.';
+  if(String(code)==='264'||/retry in a few days/i.test(String(message)))return 'The issuer asked that this payment be tried again later.';
+  return 'The card issuer declined this payment. Please contact the issuer or use a different card.';
+};
 function stream(file,res,cache='no-cache'){if(!existsSync(file)){res.writeHead(404);return res.end('Not found')}res.writeHead(200,{'content-type':types[extname(file).toLowerCase()]||'application/octet-stream','cache-control':cache});createReadStream(file).pipe(res)}
 
 function syncOfferPricing(pathname,html){
@@ -157,8 +189,66 @@ async function api(req,res,url){
   if(req.method==='POST'&&url.pathname==='/api/member/activity'){const session=readMemberSession(req);if(!session)return json(res,401,{error:'Sign in required'});await touchMemberActivity(session);return json(res,200,{ok:true})}
   if(url.pathname.startsWith('/api/member/')){const account=await memberAccount(req);if(!account)return json(res,401,{error:'Sign in required'});const access=await entitlements(account);if(req.method==='GET'&&url.pathname==='/api/member/me')return json(res,200,{email:account.email,isAdmin:account.is_admin,entitlements:access});if(req.method==='GET'&&url.pathname==='/api/member/links')return json(res,200,{items:await many('SELECT id,name,url,created_at FROM getqlabs_member_links WHERE account_id=$1 ORDER BY id DESC',[account.id])});if(req.method==='POST'&&url.pathname==='/api/member/links'){const input=await body(req),name=String(input.name||'').trim().slice(0,100),link=String(input.url||'').trim().slice(0,1000);if(!name||!/^https?:\/\//i.test(link))return json(res,400,{error:'Enter a name and valid link'});const item=await one('INSERT INTO getqlabs_member_links(account_id,name,url) VALUES($1,$2,$3) RETURNING id,name,url,created_at',[account.id,name,link]);return json(res,201,{item})}if(req.method==='GET'&&url.pathname==='/api/member/content')return json(res,200,{items:await many('SELECT id,kind,title,body,created_at FROM getqlabs_member_content WHERE account_id=$1 ORDER BY id DESC',[account.id])});if(req.method==='POST'&&url.pathname==='/api/member/content'){const input=await body(req),item=await one('INSERT INTO getqlabs_member_content(account_id,kind,title,body) VALUES($1,$2,$3,$4) RETURNING id,kind,title,body,created_at',[account.id,String(input.kind||'generated').slice(0,40),String(input.title||'Untitled').slice(0,120),String(input.body||'').slice(0,10000)]);return json(res,201,{item})}if(req.method==='POST'&&url.pathname==='/api/member/request'){const input=await body(req),message=String(input.message||'').trim();if(!message)return json(res,400,{error:'Enter a message'});const item=await one('INSERT INTO getqlabs_member_requests(account_id,kind,message) VALUES($1,$2,$3) RETURNING id,status',[account.id,String(input.kind||'support').slice(0,40),message.slice(0,5000)]);return json(res,201,{item})}}
   if(req.method==='GET'&&url.pathname==='/api/checkout/config'){try{const product=getProduct(url.searchParams.get('product')||'front');if(!process.env.NMI_PUBLIC_KEY||!process.env.NMI_PRIVATE_KEY)throw Error('Checkout is not configured');return json(res,200,{gateway:'nmi',publicKey:process.env.NMI_PUBLIC_KEY,product:{id:product.id,name:product.name,formatted:`$${product.amount.toFixed(2)}`}})}catch(error){return json(res,400,{error:error.message})}}
-  if(req.method==='POST'&&url.pathname==='/api/checkout'){const input=await body(req);if(!input.consent)return json(res,400,{error:'Payment authorization is required'});if(!input.paymentToken)return json(res,400,{error:'Secure card token is required'});let product;try{product=getProduct(input.product)}catch(error){return json(res,400,{error:error.message})}if(product.id!=='front')return json(res,400,{error:'Initial checkout product is invalid'});const result=await upsertLead({...input,source:'checkout',email_consent:false,sms_consent:false});const lead=result.lead;let order=await one('SELECT * FROM orders WHERE lead_id=$1 AND product_id=$2',[lead.id,product.id]);if(order?.status==='paid'){setSession(req,res,lead.id);return json(res,200,{ok:true,next:product.next,orderId:Number(order.id)})}const stamp=now();if(order){await run("UPDATE orders SET status='pending',gateway='nmi',response_message='',updated_at=$1 WHERE id=$2",[stamp,order.id])}else{order=(await run("INSERT INTO orders(lead_id,product_id,product_name,amount,status,gateway,created_at,updated_at) VALUES($1,$2,$3,$4,$5,'nmi',$6,$6) RETURNING id",[lead.id,product.id,product.name,product.amount,'pending',stamp]))[0]}try{const payment=await chargeToken({product,paymentToken:input.paymentToken,customer:input,invoice:`QL-${order.id}`});await run("UPDATE orders SET status='paid',gateway='nmi',transaction_id=$1,response_code=$2,response_message=$3,updated_at=$4 WHERE id=$5",[payment.transactionId,payment.responseCode,payment.responseText||'Approved',now(),order.id]);if(payment.customerVaultId)await run(`INSERT INTO gateway_profiles(lead_id,gateway,customer_profile_id,payment_profile_id,created_at,updated_at) VALUES($1,'nmi',$2,$3,$4,$4) ON CONFLICT(lead_id) DO UPDATE SET gateway='nmi',customer_profile_id=excluded.customer_profile_id,payment_profile_id=excluded.payment_profile_id,updated_at=excluded.updated_at`,[lead.id,payment.customerVaultId,payment.transactionId,now()]);await addEvent(lead.id,'sale',{value:product.amount,currency:'USD',product_id:product.id,transaction_id:payment.transactionId,metadata:{gateway:'nmi'}});await scheduleAutomations(lead,'conversion');setSession(req,res,lead.id);return json(res,200,{ok:true,next:product.next,orderId:Number(order.id)})}catch(error){await run("UPDATE orders SET status='declined',response_code=$1,response_message=$2,updated_at=$3 WHERE id=$4",[error.code||'',String(error.message).slice(0,500),now(),order.id]);return json(res,402,{error:error.message})}}
-  if(req.method==='POST'&&url.pathname==='/api/purchase'){const session=readSession(req);if(!session)return json(res,401,{error:'Your secure checkout session expired. Please complete the initial checkout again.'});const input=await body(req);let product;try{product=getProduct(input.product)}catch(error){return json(res,400,{error:error.message})}if(product.id==='front')return json(res,400,{error:'Invalid upgrade'});const lead=await one('SELECT * FROM leads WHERE id=$1',[session.leadId]),profile=await one('SELECT * FROM gateway_profiles WHERE lead_id=$1',[session.leadId]);if(!lead||!profile||!['nmi','authorize_net'].includes(profile.gateway))return json(res,409,{error:'Saved payment profile is unavailable. Please contact support.'});let order=await one('SELECT * FROM orders WHERE lead_id=$1 AND product_id=$2',[lead.id,product.id]);if(order?.status==='paid')return json(res,200,{ok:true,next:product.next,orderId:Number(order.id)});const stamp=now();if(order){await run("UPDATE orders SET status='pending',gateway=$1,response_message='',updated_at=$2 WHERE id=$3",[profile.gateway,stamp,order.id])}else{order=(await run('INSERT INTO orders(lead_id,product_id,product_name,amount,status,gateway,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$7) RETURNING id',[lead.id,product.id,product.name,product.amount,'pending',profile.gateway,stamp]))[0]}try{const payment=profile.gateway==='nmi'?await chargeVault({product,customerVaultId:profile.customer_profile_id,initialTransactionId:profile.payment_profile_id,invoice:`QL-${order.id}`}):await chargeProfile({product,customerProfileId:profile.customer_profile_id,paymentProfileId:profile.payment_profile_id,invoice:`QL-${order.id}`});await run("UPDATE orders SET status='paid',gateway=$1,transaction_id=$2,response_code=$3,response_message=$4,updated_at=$5 WHERE id=$6",[profile.gateway,payment.transactionId,payment.responseCode,payment.responseText||'Approved',now(),order.id]);await addEvent(lead.id,'sale',{value:product.amount,currency:'USD',product_id:product.id,transaction_id:payment.transactionId,metadata:{gateway:profile.gateway,one_click:true}});return json(res,200,{ok:true,next:product.next,orderId:Number(order.id)})}catch(error){await run("UPDATE orders SET status='declined',response_code=$1,response_message=$2,updated_at=$3 WHERE id=$4",[error.code||'',String(error.message).slice(0,500),now(),order.id]);return json(res,402,{error:error.message})}}
+  if(req.method==='POST'&&url.pathname==='/api/checkout'){
+    const input=await body(req),validationError=checkoutValidationError(input);
+    if(validationError)return json(res,400,{error:validationError});
+    if(!input.consent)return json(res,400,{error:'Payment authorization is required'});
+    if(!input.paymentToken)return json(res,400,{error:'Secure card token is required'});
+    let product;try{product=getProduct(input.product)}catch(error){return json(res,400,{error:error.message})}
+    if(product.id!=='front')return json(res,400,{error:'Initial checkout product is invalid'});
+    const ip=clientIp(req),ipHash=paymentIpHash(req),result=await upsertLead({...input,ip,source:'checkout',email_consent:false,sms_consent:false}),lead=result.lead;
+    let order=await one('SELECT * FROM orders WHERE lead_id=$1 AND product_id=$2',[lead.id,product.id]);
+    if(order?.status==='paid'){setSession(req,res,lead.id);return json(res,200,{ok:true,next:product.next,orderId:Number(order.id)})}
+    if(await paymentGuard({leadId:lead.id,ipHash})){
+      await run(`INSERT INTO payment_attempts(lead_id,order_id,gateway,product_id,amount,status,response_code,response_message,ip_hash) VALUES($1,$2,'nmi',$3,$4,'blocked','velocity','Payment velocity limit reached',$5)`,[lead.id,order?.id||null,product.id,product.amount,ipHash]);
+      return json(res,429,{error:'For your security, payment attempts are temporarily paused. Please wait 30 minutes or contact support.'});
+    }
+    const stamp=now();
+    if(order)await run("UPDATE orders SET status='pending',gateway='nmi',response_message='',updated_at=$1 WHERE id=$2",[stamp,order.id]);
+    else order=(await run("INSERT INTO orders(lead_id,product_id,product_name,amount,status,gateway,created_at,updated_at) VALUES($1,$2,$3,$4,$5,'nmi',$6,$6) RETURNING id",[lead.id,product.id,product.name,product.amount,'pending',stamp]))[0];
+    const attempt=await startPaymentAttempt({leadId:lead.id,orderId:order.id,product,ipHash});
+    try{
+      const payment=await chargeToken({product,paymentToken:input.paymentToken,customer:input,invoice:`QL-${order.id}`});
+      await finishPaymentAttempt(attempt.id,'approved',payment.responseCode,payment.responseText||'Approved');
+      await run("UPDATE orders SET status='paid',gateway='nmi',transaction_id=$1,response_code=$2,response_message=$3,updated_at=$4 WHERE id=$5",[payment.transactionId,payment.responseCode,payment.responseText||'Approved',now(),order.id]);
+      if(payment.customerVaultId)await run(`INSERT INTO gateway_profiles(lead_id,gateway,customer_profile_id,payment_profile_id,created_at,updated_at) VALUES($1,'nmi',$2,$3,$4,$4) ON CONFLICT(lead_id) DO UPDATE SET gateway='nmi',customer_profile_id=excluded.customer_profile_id,payment_profile_id=excluded.payment_profile_id,updated_at=excluded.updated_at`,[lead.id,payment.customerVaultId,payment.transactionId,now()]);
+      await addEvent(lead.id,'sale',{value:product.amount,currency:'USD',product_id:product.id,transaction_id:payment.transactionId,metadata:{gateway:'nmi'}});await scheduleAutomations(lead,'conversion');setSession(req,res,lead.id);
+      return json(res,200,{ok:true,next:product.next,orderId:Number(order.id)});
+    }catch(error){
+      await finishPaymentAttempt(attempt.id,'declined',error.code,error.message);
+      await run("UPDATE orders SET status='declined',response_code=$1,response_message=$2,updated_at=$3 WHERE id=$4",[error.code||'',String(error.message).slice(0,500),now(),order.id]);
+      return json(res,402,{error:publicDeclineMessage(error.code,error.message)});
+    }
+  }
+  if(req.method==='POST'&&url.pathname==='/api/purchase'){
+    const session=readSession(req);if(!session)return json(res,401,{error:'Your secure checkout session expired. Please complete the initial checkout again.'});
+    const input=await body(req);let product;try{product=getProduct(input.product)}catch(error){return json(res,400,{error:error.message})}
+    if(product.id==='front')return json(res,400,{error:'Invalid upgrade'});
+    const lead=await one('SELECT * FROM leads WHERE id=$1',[session.leadId]),profile=await one('SELECT * FROM gateway_profiles WHERE lead_id=$1',[session.leadId]);
+    if(!lead||!profile||!['nmi','authorize_net'].includes(profile.gateway))return json(res,409,{error:'Saved payment profile is unavailable. Please contact support.'});
+    let order=await one('SELECT * FROM orders WHERE lead_id=$1 AND product_id=$2',[lead.id,product.id]);
+    if(order?.status==='paid')return json(res,200,{ok:true,next:product.next,orderId:Number(order.id)});
+    const ipHash=paymentIpHash(req);
+    if(profile.gateway==='nmi'&&await paymentGuard({leadId:lead.id,ipHash})){
+      await run(`INSERT INTO payment_attempts(lead_id,order_id,gateway,product_id,amount,status,response_code,response_message,ip_hash) VALUES($1,$2,'nmi',$3,$4,'blocked','velocity','Payment velocity limit reached',$5)`,[lead.id,order?.id||null,product.id,product.amount,ipHash]);
+      return json(res,429,{error:'Additional payment attempts are temporarily paused. Please wait 30 minutes or contact support.'});
+    }
+    const stamp=now();
+    if(order)await run("UPDATE orders SET status='pending',gateway=$1,response_message='',updated_at=$2 WHERE id=$3",[profile.gateway,stamp,order.id]);
+    else order=(await run('INSERT INTO orders(lead_id,product_id,product_name,amount,status,gateway,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$7) RETURNING id',[lead.id,product.id,product.name,product.amount,'pending',profile.gateway,stamp]))[0];
+    const attempt=profile.gateway==='nmi'?await startPaymentAttempt({leadId:lead.id,orderId:order.id,product,ipHash}):null;
+    try{
+      const payment=profile.gateway==='nmi'?await chargeVault({product,customerVaultId:profile.customer_profile_id,initialTransactionId:profile.payment_profile_id,invoice:`QL-${order.id}`}):await chargeProfile({product,customerProfileId:profile.customer_profile_id,paymentProfileId:profile.payment_profile_id,invoice:`QL-${order.id}`});
+      if(attempt)await finishPaymentAttempt(attempt.id,'approved',payment.responseCode,payment.responseText||'Approved');
+      await run("UPDATE orders SET status='paid',gateway=$1,transaction_id=$2,response_code=$3,response_message=$4,updated_at=$5 WHERE id=$6",[profile.gateway,payment.transactionId,payment.responseCode,payment.responseText||'Approved',now(),order.id]);
+      await addEvent(lead.id,'sale',{value:product.amount,currency:'USD',product_id:product.id,transaction_id:payment.transactionId,metadata:{gateway:profile.gateway,one_click:true}});
+      return json(res,200,{ok:true,next:product.next,orderId:Number(order.id)});
+    }catch(error){
+      if(attempt)await finishPaymentAttempt(attempt.id,'declined',error.code,error.message);
+      await run("UPDATE orders SET status='declined',response_code=$1,response_message=$2,updated_at=$3 WHERE id=$4",[error.code||'',String(error.message).slice(0,500),now(),order.id]);
+      return json(res,402,{error:profile.gateway==='nmi'?publicDeclineMessage(error.code,error.message):error.message});
+    }
+  }
   if(req.method==='POST'&&url.pathname==='/api/leads'){const input=await body(req);input.ip=req.headers['x-forwarded-for']?.split(',')[0]||req.socket.remoteAddress||'';const result=await upsertLead(input);await addEvent(result.lead.id,'opt_in',{page:input.landing_page,metadata:{source:input.source||'website'}});if(result.created)await scheduleAutomations(result.lead);return json(res,201,{ok:true,id:Number(result.lead.id)})}
   if(req.method==='POST'&&url.pathname==='/api/events'){const input=await body(req),allowed=new Set(['page_view','checkout_click','checkout_start','step2_webinar_click','video_unmute','video_25','video_50','video_75','video_100']);if(!allowed.has(input.type))return json(res,400,{error:'Unsupported event'});await addEvent(null,input.type,{page:input.page,product_id:input.product_id,metadata:{aid:input.aid,tid:input.tid,utm_source:input.utm_source,utm_campaign:input.utm_campaign,session_id:String(input.session_id||'').slice(0,80),device:String(input.device||'').slice(0,20)}});return json(res,201,{ok:true})}
   if(req.method==='POST'&&url.pathname==='/api/webhooks/jvzoo'){const supplied=url.searchParams.get('secret')||req.headers['x-webhook-secret'];if(!process.env.WEBHOOK_SECRET||!secureEqual(supplied,process.env.WEBHOOK_SECRET))return json(res,401,{error:'Invalid webhook secret'});const input=await body(req),email=input.ccustemail||input.email,name=input.ccustname||input.name||'';const result=await upsertLead({email,phone:input.ccustphone||input.phone,name,source:'jvzoo',aid:input.caffitid||input.aid,tid:input.ctid||input.tid});const raw=String(input.ctransaction||input.transaction_type||input.type||'sale').toLowerCase(),eventType=raw.includes('refund')||raw.includes('cancel')?'refund':'sale';const added=await addEvent(result.lead.id,eventType,{value:input.camount||input.amount||input.ctransamount,currency:input.ccurrency||'USD',product_id:input.cproditem||input.product_id,transaction_id:input.ctransreceipt||input.transaction_id,metadata:input});if(added&&eventType==='sale')await scheduleAutomations(result.lead,'conversion');return json(res,200,{ok:true})}
