@@ -123,7 +123,12 @@ const startMemberActivity=async accountId=>(await one('INSERT INTO getqlabs_memb
 const touchMemberActivity=async session=>{if(!session?.activityId)return;await run(`UPDATE getqlabs_member_sessions SET duration_seconds=duration_seconds+LEAST(90,GREATEST(0,EXTRACT(EPOCH FROM (NOW()-last_activity_at)))::int),last_activity_at=NOW() WHERE id=$1 AND account_id=$2 AND ended_at IS NULL`,[session.activityId,session.id])};
 const endMemberActivity=async session=>{if(!session?.activityId)return;await run(`UPDATE getqlabs_member_sessions SET duration_seconds=duration_seconds+LEAST(90,GREATEST(0,EXTRACT(EPOCH FROM (NOW()-last_activity_at)))::int),last_activity_at=NOW(),ended_at=NOW() WHERE id=$1 AND account_id=$2 AND ended_at IS NULL`,[session.activityId,session.id])};
 const memberAccount=async req=>{const session=readMemberSession(req);return session?one('SELECT * FROM getqlabs_member_accounts WHERE id=$1',[session.id]):null};
-const entitlements=async()=>['front','oto1','oto2','oto3','oto4','oto5','oto6','oto7'];
+const entitlements=async account=>{
+  if(account?.is_admin)return ['front','oto1','oto2','oto3','oto4','oto5','oto6','oto7'];
+  if(!account?.lead_id)return [];
+  const rows=await many("SELECT DISTINCT product_id FROM orders WHERE lead_id=$1 AND status='paid'",[account.lead_id]);
+  return [...new Set(rows.map(row=>String(row.product_id||'').replace(/_downsell$/,'')).filter(Boolean))];
+};
 
 async function body(req){const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>1e6)throw Error('Request too large');chunks.push(chunk)}const raw=Buffer.concat(chunks).toString(),type=req.headers['content-type']||'';return type.includes('application/json')?(raw?JSON.parse(raw):{}):Object.fromEntries(new URLSearchParams(raw))}
 const clientIp=req=>String(req.headers['x-forwarded-for']||req.socket?.remoteAddress||'').split(',')[0].trim().slice(0,100);
