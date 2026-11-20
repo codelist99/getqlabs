@@ -1,4 +1,36 @@
 (() => {
+  if (!/^\/thankyou\/?$/.test(location.pathname)) return;
+  const enhanceThankYou = () => {
+    const callout = document.querySelector('.wc-call-now');
+    if (!callout) return;
+    let refund = callout.querySelector('.refund-notice');
+    if (!refund) {
+      const schedule = callout.querySelector('.schedule');
+      if (!schedule) return;
+      schedule.insertAdjacentHTML('afterend','<div class="refund-notice">FOR REFUNDS PLEASE EMAIL SUPPORT@KAIROSTECHNOLOGYLABS.COM</div>');
+      refund = callout.querySelector('.refund-notice');
+    }
+    let warning = callout.querySelector('.dispute-warning');
+    if (!warning) {
+      refund.insertAdjacentHTML('afterend','<div class="dispute-warning">DO NOT FILE A DISPUTE. THEN WE ARE FORCED TO FIGHT THE DISPUTE, WHICH CAN OFTEN LEAD TO YOU LOSING. CALL US FOR A NO-QUESTIONS-ASKED REFUND.</div>');
+      warning = callout.querySelector('.dispute-warning');
+    }
+    let member = callout.querySelector('.member-access');
+    if (!member) {
+      warning.insertAdjacentHTML('afterend','<a class="member-access" href="/member-login">CREATE YOUR QLABS MEMBER ACCOUNT</a>');
+      member = callout.querySelector('.member-access');
+    }
+    if (member.previousElementSibling !== warning) warning.insertAdjacentElement('afterend',member);
+  };
+  const style = document.createElement('style');
+  style.textContent = '.wc-call-now .dispute-warning{box-sizing:border-box;max-width:1000px;margin:16px auto 0;padding:18px 22px;border:3px solid #fff;border-radius:12px;background:#b91c1c;color:#fff;font:900 clamp(16px,2vw,23px)/1.25 Arial,sans-serif;letter-spacing:.02em}.wc-call-now .member-access{display:block!important;max-width:760px;margin:28px auto 0!important;padding:20px 24px;border-radius:14px;background:linear-gradient(135deg,#307cff,#8b5cf6)!important;color:#fff!important;text-decoration:none;font:900 clamp(24px,4vw,48px)/1 Arial,sans-serif;box-shadow:0 8px 0 #16245c,0 0 35px #4de4ff}@media(max-width:600px){.wc-call-now .refund-notice{white-space:normal!important}.wc-call-now .dispute-warning{padding:15px 12px}}';
+  document.head.appendChild(style);
+  enhanceThankYou();
+  addEventListener('load',enhanceThankYou,{once:true});
+  new MutationObserver(enhanceThankYou).observe(document.body,{childList:true,subtree:true});
+})();
+
+(() => {
   if (/^\/thankyou\/?$/.test(location.pathname)) {
     const bookingUrl = 'https://cal.com/jon19/qlabs-onboarding';
     const repairBookingLinks = () => {
