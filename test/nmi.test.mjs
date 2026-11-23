@@ -16,7 +16,7 @@ test('initial NMI vault sale is marked as a customer-stored credential',async()=
   let submitted;
   global.fetch=async(_url,options)=>{submitted=new URLSearchParams(options.body);return new Response('response=1&response_code=100&responsetext=Approved&transactionid=123&customer_vault_id=456')};
   try{
-    await chargeToken({product:{amount:47,currency:'USD',name:'Q Labs'},paymentToken:'token',invoice:'QL-1',customer:{first_name:'Test',last_name:'Buyer',email:'buyer@example.com',phone:'5555551212',address:'123 Main St',city:'Austin',state:'TX',zip:'78701',country:'US'}});
+    await chargeToken({product:{amount:47,currency:'USD',name:'MoneyLabs'},paymentToken:'token',invoice:'QL-1',customer:{first_name:'Test',last_name:'Buyer',email:'buyer@example.com',phone:'5555551212',address:'123 Main St',city:'Austin',state:'TX',zip:'78701',country:'US'}});
     assert.equal(submitted.get('stored_credential_indicator'),'stored');
     assert.equal(submitted.get('initiated_by'),'customer');
     assert.equal(submitted.get('customer_vault'),'add_customer');

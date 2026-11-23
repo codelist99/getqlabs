@@ -1,12 +1,12 @@
-# Get Q Labs
+# MoneyLabs
 
-Independent Get Q Labs sales funnel, NMI checkout, one-click upgrade flow, reporting database, and campaign admin.
+Independent MoneyLabs sales funnel, NMI checkout, one-click upgrade flow, reporting database, and campaign admin.
 
 ## Funnel
 
 | Route | Product | Price | Discount |
 |---|---|---:|---:|
-| `/` | Q Labs | $47 | — |
+| `/` | MoneyLabs | $47 | — |
 | `/oto1` | Done-For-You | $197 | $97 |
 | `/oto2` | Automated Profits | $97 | $47 |
 | `/oto3` | Instant Income | $67 | $37 |

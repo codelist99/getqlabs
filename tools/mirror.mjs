@@ -34,4 +34,4 @@ for (const route of pages) {
 }
 
 await copyFile(join(root, 'fe', 'index.html'), join(root, 'index.html'));
-console.log(`Mirrored ${pages.length} Get Q Labs pages.`);
+console.log(`Mirrored ${pages.length} MoneyLabs pages.`);

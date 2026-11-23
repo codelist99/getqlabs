@@ -32,8 +32,8 @@
       if (document.querySelector('.wc-call-now')) return;
       const callout = document.createElement('section');
       callout.className = 'wc-call-now';
-      callout.innerHTML = '<div><h1>Congratulations</h1><p class="thanks">Thanks for purchasing Q Labs</p><strong>YOUR ORDER IS COMPLETE</strong><h2>Step 1: Call Our Office Now To Get Started</h2><a class="phone" href="tel:+12067032153">(206) 703-2153</a><p>Tap the number or call now so our team can help you get started.</p><div class="or">— OR —</div><a class="schedule" href="'+bookingUrl+'" target="_blank" rel="noreferrer noopener">Schedule Your Onboarding Call</a></div>';
-      callout.querySelector('.schedule').insertAdjacentHTML('afterend','<div class="refund-notice">FOR REFUNDS PLEASE EMAIL SUPPORT@KAIROSTECHNOLOGYLABS.COM</div><a class="member-access" href="/member-login">CREATE YOUR QLABS MEMBER ACCOUNT</a>');
+      callout.innerHTML = '<div><h1>Congratulations</h1><p class="thanks">Thanks for purchasing MoneyLabs</p><strong>YOUR ORDER IS COMPLETE</strong><h2>Step 1: Call Our Office Now To Get Started</h2><a class="phone" href="tel:+12067032153">(206) 703-2153</a><p>Tap the number or call now so our team can help you get started.</p><div class="or">— OR —</div><a class="schedule" href="'+bookingUrl+'" target="_blank" rel="noreferrer noopener">Schedule Your Onboarding Call</a></div>';
+      callout.querySelector('.schedule').insertAdjacentHTML('afterend','<div class="refund-notice">FOR REFUNDS PLEASE EMAIL SUPPORT@KAIROSTECHNOLOGYLABS.COM</div><a class="member-access" href="/member-login">CREATE YOUR MONEYLABS MEMBER ACCOUNT</a>');
       document.body.prepend(callout);
     };
     if (!document.getElementById('wc-call-now-style')) {
