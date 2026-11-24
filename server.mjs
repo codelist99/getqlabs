@@ -16,6 +16,25 @@ const root=dirname(fileURLToPath(import.meta.url)),port=Number(process.env.PORT|
 let refundSyncAt=0,refundSyncPromise,refundSyncStatus={ok:null,message:'Not checked'};
 let nmiRefundSyncAt=0,nmiRefundSyncPromise,nmiRefundSyncStatus={ok:null,message:'Not checked'};
 let chargebackSyncAt=0,chargebackSyncPromise,chargebackSyncStatus={ok:null,message:'Not checked'};
+let onboardingScheduleCache={url:'',expiresAt:0};
+async function onboardingScheduleUrl(){
+  const fallback=process.env.CAL_ONBOARDING_URL||'https://cal.com/moneylabs/30min';
+  if(onboardingScheduleCache.expiresAt>Date.now())return onboardingScheduleCache.url;
+  if(!process.env.CAL_API_KEY)return fallback;
+  try{
+    const headers={authorization:`Bearer ${process.env.CAL_API_KEY}`,'cal-api-version':'2024-06-14'};
+    const [meResponse,eventResponse]=await Promise.all([fetch('https://api.cal.com/v2/me',{headers}),fetch('https://api.cal.com/v2/event-types',{headers})]);
+    if(!meResponse.ok||!eventResponse.ok)throw Error('Cal.com schedule lookup failed');
+    const user=(await meResponse.json()).data,events=(await eventResponse.json()).data||[];
+    const event=events.find(item=>/on\s*boarding|account creation/i.test(item.title||''))||events.find(item=>item.slug==='30min');
+    const schedule=user?.username&&event?.slug?`https://cal.com/${user.username}/${event.slug}`:fallback;
+    onboardingScheduleCache={url:schedule,expiresAt:Date.now()+900000};
+    return schedule;
+  }catch(error){
+    console.error('Cal.com schedule lookup failed',error.message);
+    return fallback;
+  }
+}
 async function syncAuthorizeRefunds(){
   if(Date.now()-refundSyncAt<300000)return;
   if(refundSyncPromise)return refundSyncPromise;
@@ -170,23 +189,26 @@ function syncOfferPricing(pathname,html){
   html=html.replaceAll('wificode@neoai.freshdesk.com','support@kairostechnologylabs.com');
   if(pathname==='/member.html')html=html.replace('</body>','<script src="/assets/member-activity.js"></script></body>');
   if(/^\/thankyou(?:\/|\/index\.html)?$/.test(pathname)){
-    const bookingUrl='https://cal.com/jon19/wificode-onboarding';
+    const bookingUrl='/api/onboarding/schedule';
     html=html
       .replaceAll('https://wificodemembers.com/auth/sign-up',bookingUrl)
-      .replaceAll('https:\\u002F\\u002Fwificodemembers.com\\u002Fauth\\u002Fsign-up','https:\\u002F\\u002Fcal.com\\u002Fsupport-staff-wznd51\\u002Fwificode-onboarding')
-      .replaceAll('support-staff-wznd51','jon19')
+      .replaceAll('https:\\u002F\\u002Fwificodemembers.com\\u002Fauth\\u002Fsign-up','\\u002Fapi\\u002Fonboarding\\u002Fschedule')
       .replaceAll('Click Here To Sign Up','Schedule Your Onboarding Call')
       .replaceAll('Sign Up For Your Account','Schedule Your Onboarding Call')
       .replaceAll('STEP 3:','STEP 2:');
     const style='<style>#row-6akI79Ag53,#heading-4D78-JK5XM,#image-oUaHP-YYRf,#button-6z3ECAhIQI,#heading-OH-br3GG9n,#image-Nhuus-AYlT,#button-IeaVABsPRw{display:none!important}.wc-call-now{position:relative;z-index:99999;background:linear-gradient(135deg,#050a54,#0b4db8);color:#fff;text-align:center;padding:42px 18px;border-bottom:8px solid #ffd43b;box-shadow:0 10px 35px #0005}.wc-call-now>div{max-width:1050px;margin:auto}.wc-call-now h1{margin:0;font:900 clamp(48px,8vw,92px)/1 Arial,sans-serif}.wc-call-now .thanks{margin:10px 0 30px;font:700 clamp(20px,3vw,30px)/1.3 Georgia,serif}.wc-call-now strong{display:inline-block;background:#ffd43b;color:#111827;padding:8px 16px;border-radius:999px;font:800 15px/1.2 Arial,sans-serif;letter-spacing:.08em}.wc-call-now h2{margin:22px 0 8px;font:900 clamp(30px,5vw,58px)/1.05 Arial,sans-serif;text-transform:uppercase}.wc-call-now a{display:inline-block;margin:10px 0;padding:18px 30px;border-radius:14px;color:#fff!important;text-decoration:none;font:900 clamp(28px,5vw,60px)/1 Arial,sans-serif}.wc-call-now .phone{background:#22c55e;box-shadow:0 8px 0 #147a38,0 14px 30px #0005}.wc-call-now .or{margin:28px auto 12px;font:900 25px/1 Arial,sans-serif}.wc-call-now .schedule{background:#7c3aed;box-shadow:0 8px 0 #4c1d95,0 14px 30px #0005}.wc-call-now .refund-notice{box-sizing:border-box;display:block;margin:30px auto 0;max-width:100%;padding:16px 20px;border:3px solid #ffd43b;border-radius:12px;background:#fff;color:#081b61;font:900 clamp(9px,1.6vw,20px)/1.2 Arial,sans-serif;letter-spacing:.02em;white-space:nowrap}.wc-call-now p{margin:22px 0 0;font:700 20px/1.4 Arial,sans-serif}@media(max-width:600px){.wc-call-now{padding:28px 12px}.wc-call-now a{padding:16px 14px;width:100%}.wc-call-now .refund-notice{padding:12px 6px}}</style>';
     const emailFix='<script>(function(){var oldEmail="wificode@neoai.freshdesk.com",newEmail="support@kairostechnologylabs.com";function scrub(root){if(!root)return;if(root.nodeType===3){if(root.nodeValue&&root.nodeValue.includes(oldEmail))root.nodeValue=root.nodeValue.replaceAll(oldEmail,newEmail);return}if(root.nodeType!==1&&root.nodeType!==9&&root.nodeType!==11)return;if(root.nodeType===1){for(var attr of ["href","content"]){var value=root.getAttribute(attr);if(value&&value.includes(oldEmail))root.setAttribute(attr,value.replaceAll(oldEmail,newEmail))}}var walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);while(walker.nextNode()){var text=walker.currentNode;if(text.nodeValue&&text.nodeValue.includes(oldEmail))text.nodeValue=text.nodeValue.replaceAll(oldEmail,newEmail)}if(root.querySelectorAll)root.querySelectorAll("[href*=neoai],[content*=neoai]").forEach(function(el){for(var attr of ["href","content"]){var value=el.getAttribute(attr);if(value&&value.includes(oldEmail))el.setAttribute(attr,value.replaceAll(oldEmail,newEmail))}})}new MutationObserver(function(records){records.forEach(function(record){record.addedNodes.forEach(scrub);if(record.type==="characterData")scrub(record.target)})}).observe(document.documentElement,{subtree:true,childList:true,characterData:true});document.addEventListener("DOMContentLoaded",function(){scrub(document.body)});scrub(document.documentElement)})();</script>';
-    const callout=emailFix+'<section class="wc-call-now"><div><h1>Congratulations</h1><p class="thanks">Thanks for purchasing MoneyLabs</p><strong>YOUR ORDER IS COMPLETE</strong><h2>Step 1: Call Our Office Now To Get Started</h2><a class="phone" href="tel:+12067032153">(206) 703-2153</a><p>Tap the number or call now so our team can help you get started.</p><div class="or">— OR —</div><a class="schedule" href="'+bookingUrl+'" target="_blank" rel="noreferrer noopener">Schedule Your Onboarding Call</a><div class="refund-notice">FOR REFUNDS PLEASE EMAIL SUPPORT@KAIROSTECHNOLOGYLABS.COM</div></div></section>';
+    const callout=emailFix+'<section class="wc-call-now"><div><h1>Congratulations</h1><p class="thanks">Thanks for purchasing MoneyLabs</p><strong>YOUR ORDER IS COMPLETE</strong><h2>Step 1: Call Our Office Now To Get Started</h2><a class="phone" href="tel:+18085006015">(808) 500-6015</a><p>Tap the number or call now so our team can help you get started.</p><div class="or">— OR —</div><a class="schedule" href="'+bookingUrl+'" target="_blank" rel="noreferrer noopener">Schedule Your Onboarding Call</a><div class="refund-notice">FOR REFUNDS PLEASE EMAIL SUPPORT@KAIROSTECHNOLOGYLABS.COM</div></div></section>';
     return html.replace('</head>',`${style}</head>`).replace(/<body([^>]*)>/i,`<body$1>${callout}`);
   }
   return html;
 }
 
 async function api(req,res,url){
+  if(req.method==='GET'&&url.pathname==='/api/onboarding/schedule'){
+    res.writeHead(302,{location:await onboardingScheduleUrl(),'cache-control':'no-store'});
+    return res.end();
+  }
   if(['GET','POST'].includes(req.method)&&url.pathname==='/api/unsubscribe'){const email=String(url.searchParams.get('email')||'').trim().toLowerCase(),token=String(url.searchParams.get('token')||''),expected=email?createHmac('sha256',process.env.SESSION_SECRET||process.env.CRON_SECRET).update(email).digest('base64url'):'';if(!email||!secureEqual(token,expected))return json(res,400,{error:'Invalid unsubscribe link'});await run('UPDATE leads SET unsubscribed=TRUE,email_consent=FALSE,updated_at=$1 WHERE LOWER(email)=$2',[now(),email]);if(req.method==='POST')return json(res,200,{ok:true});res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store'});return res.end('<!doctype html><meta name="viewport" content="width=device-width"><title>Unsubscribed</title><main style="max-width:560px;margin:12vh auto;padding:30px;font:18px Arial;text-align:center"><h1>You are unsubscribed</h1><p>You will no longer receive marketing emails from this offer.</p></main>')}
   if(req.method==='GET'&&url.pathname==='/api/cron/email'){const supplied=req.headers.authorization||'',expected=`Bearer ${process.env.CRON_SECRET||''}`;if(!process.env.CRON_SECRET||!secureEqual(supplied,expected))return json(res,401,{error:'Unauthorized'});return json(res,200,{ok:true,processed:await processDueMessages()})}
   if(req.method==='POST'&&url.pathname==='/api/member/setup'){const input=await body(req),email=String(input.email||'').trim().toLowerCase(),password=String(input.password||'');if(!email||password.length<8)return json(res,400,{error:'Enter your purchase email and a password of at least 8 characters'});const lead=await one("SELECT l.* FROM leads l WHERE LOWER(l.email)=$1 AND EXISTS(SELECT 1 FROM orders o WHERE o.lead_id=l.id AND o.status='paid')",[email]);if(!lead)return json(res,403,{error:'No approved MoneyLabs purchase was found for that email'});if(await one('SELECT id FROM getqlabs_member_accounts WHERE email=$1 OR lead_id=$2',[email,lead.id]))return json(res,409,{error:'An account already exists. Sign in instead.'});const account=await one('INSERT INTO getqlabs_member_accounts(lead_id,email,password_hash,last_login_at) VALUES($1,$2,$3,NOW()) RETURNING *',[lead.id,email,hashPassword(password)]),activityId=await startMemberActivity(account.id);setMemberSession(req,res,account.id,activityId);return json(res,201,{ok:true})}

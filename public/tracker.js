@@ -6,7 +6,7 @@
     if (callout.dataset.qlCompact === 'true') return;
     callout.dataset.qlCompact = 'true';
     callout.classList.add('ql-compact');
-    callout.innerHTML = '<div class="ql-compact-inner"><h1>Congratulations</h1><div class="refund-notice">FOR REFUNDS PLEASE EMAIL SUPPORT@KAIROSTECHNOLOGYLABS.COM</div><div class="dispute-warning">DO NOT FILE A DISPUTE. THEN WE ARE FORCED TO FIGHT THE DISPUTE, WHICH CAN OFTEN LEAD TO YOU LOSING. CALL US FOR A NO-QUESTIONS-ASKED REFUND.</div><h2>CALL OUR OFFICE NOW TO GET STARTED</h2><a class="phone" href="tel:+12067032153">(206) 703-2153</a><div class="ql-action-row"><a class="schedule" href="https://cal.com/jon19/qlabs-onboarding" target="_blank" rel="noreferrer noopener">SCHEDULE ONBOARDING</a><a class="member-access" href="/member-login">CREATE YOUR ACCOUNT</a></div></div>';
+    callout.innerHTML = '<div class="ql-compact-inner"><h1>Congratulations</h1><div class="refund-notice">FOR REFUNDS PLEASE EMAIL SUPPORT@KAIROSTECHNOLOGYLABS.COM</div><div class="dispute-warning">DO NOT FILE A DISPUTE. THEN WE ARE FORCED TO FIGHT THE DISPUTE, WHICH CAN OFTEN LEAD TO YOU LOSING. CALL US FOR A NO-QUESTIONS-ASKED REFUND.</div><h2>CALL OUR OFFICE NOW TO GET STARTED</h2><a class="phone" href="tel:+18085006015">(808) 500-6015</a><div class="ql-action-row"><a class="schedule" href="/api/onboarding/schedule" target="_blank" rel="noreferrer noopener">SCHEDULE ONBOARDING</a><a class="member-access" href="/member-login">CREATE YOUR ACCOUNT</a></div></div>';
   };
   const style = document.createElement('style');
   style.textContent = '.wc-call-now.ql-compact{box-sizing:border-box!important;min-height:0!important;padding:14px 18px 20px!important;border-bottom:6px solid #ffd43b!important;background:linear-gradient(135deg,#06135c,#0b4db8)!important}.wc-call-now.ql-compact .ql-compact-inner{width:min(1180px,100%)!important;max-width:1180px!important;margin:0 auto!important}.wc-call-now.ql-compact h1{margin:0 0 8px!important;font:900 clamp(42px,6vw,74px)/.95 Arial,sans-serif!important}.wc-call-now.ql-compact .refund-notice{box-sizing:border-box!important;margin:0 auto 8px!important;padding:10px 14px!important;border:3px solid #ffd43b!important;border-radius:12px!important;background:#fff!important;color:#081b61!important;white-space:normal!important;font:900 clamp(13px,1.55vw,20px)/1.1 Arial,sans-serif!important}.wc-call-now.ql-compact .dispute-warning{box-sizing:border-box!important;margin:0 auto 10px!important;padding:9px 14px!important;border:2px solid #fff!important;border-radius:10px!important;background:#b91c1c!important;color:#fff!important;font:900 clamp(12px,1.25vw,17px)/1.15 Arial,sans-serif!important;letter-spacing:.01em!important}.wc-call-now.ql-compact h2{margin:8px 0!important;font:900 clamp(25px,3.5vw,44px)/1 Arial,sans-serif!important}.wc-call-now.ql-compact a.phone{display:inline-block!important;width:auto!important;margin:0 auto 12px!important;padding:12px 28px!important;border-radius:12px!important;background:#22c55e!important;color:#fff!important;font:900 clamp(30px,4vw,50px)/1 Arial,sans-serif!important;box-shadow:0 6px 0 #147a38!important}.wc-call-now.ql-compact .ql-action-row{display:grid!important;grid-template-columns:1fr 1fr!important;gap:16px!important;margin:0 auto!important}.wc-call-now.ql-compact .ql-action-row a{box-sizing:border-box!important;display:flex!important;align-items:center!important;justify-content:center!important;width:100%!important;min-height:72px!important;margin:0!important;padding:12px 18px!important;border-radius:12px!important;color:#fff!important;text-decoration:none!important;font:900 clamp(19px,2.3vw,30px)/1 Arial,sans-serif!important}.wc-call-now.ql-compact .schedule{background:#7c3aed!important;box-shadow:0 6px 0 #4c1d95!important}.wc-call-now.ql-compact .member-access{background:#ef1d24!important;box-shadow:0 6px 0 #8f1116!important}@media(max-width:700px){.wc-call-now.ql-compact{padding:12px 10px 18px!important}.wc-call-now.ql-compact .ql-action-row{grid-template-columns:1fr!important;gap:12px!important}.wc-call-now.ql-compact .ql-action-row a{min-height:58px!important}.wc-call-now.ql-compact a.phone{width:100%!important}.wc-call-now.ql-compact h1{font-size:42px!important}}';
@@ -21,10 +21,10 @@
 
 (() => {
   if (/^\/thankyou\/?$/.test(location.pathname)) {
-    const bookingUrl = 'https://cal.com/jon19/qlabs-onboarding';
+    const bookingUrl = '/api/onboarding/schedule';
     const repairBookingLinks = () => {
-      document.querySelectorAll('a[href*="cal.com/support-staff-wznd51"],a.schedule').forEach(link => {
-        if (link.href !== bookingUrl) link.href = bookingUrl;
+      document.querySelectorAll('a.schedule').forEach(link => {
+        if (link.getAttribute('href') !== bookingUrl) link.setAttribute('href',bookingUrl);
       });
     };
     const ensureCallout = () => {
@@ -32,7 +32,7 @@
       if (document.querySelector('.wc-call-now')) return;
       const callout = document.createElement('section');
       callout.className = 'wc-call-now';
-      callout.innerHTML = '<div><h1>Congratulations</h1><p class="thanks">Thanks for purchasing MoneyLabs</p><strong>YOUR ORDER IS COMPLETE</strong><h2>Step 1: Call Our Office Now To Get Started</h2><a class="phone" href="tel:+12067032153">(206) 703-2153</a><p>Tap the number or call now so our team can help you get started.</p><div class="or">— OR —</div><a class="schedule" href="'+bookingUrl+'" target="_blank" rel="noreferrer noopener">Schedule Your Onboarding Call</a></div>';
+      callout.innerHTML = '<div><h1>Congratulations</h1><p class="thanks">Thanks for purchasing MoneyLabs</p><strong>YOUR ORDER IS COMPLETE</strong><h2>Step 1: Call Our Office Now To Get Started</h2><a class="phone" href="tel:+18085006015">(808) 500-6015</a><p>Tap the number or call now so our team can help you get started.</p><div class="or">— OR —</div><a class="schedule" href="'+bookingUrl+'" target="_blank" rel="noreferrer noopener">Schedule Your Onboarding Call</a></div>';
       callout.querySelector('.schedule').insertAdjacentHTML('afterend','<div class="refund-notice">FOR REFUNDS PLEASE EMAIL SUPPORT@KAIROSTECHNOLOGYLABS.COM</div><a class="member-access" href="/member-login">CREATE YOUR MONEYLABS MEMBER ACCOUNT</a>');
       document.body.prepend(callout);
     };
