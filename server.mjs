@@ -164,17 +164,6 @@ const publicDeclineMessage=(code,message)=>{
   if(String(code)==='264'||/retry in a few days/i.test(String(message)))return 'The issuer asked that this payment be tried again later.';
   return 'The card issuer declined this payment. Please contact the issuer or use a different card.';
 };
-const captchaHash=(nonce,answer)=>createHmac('sha256',sessionSecret()).update(`captcha:${nonce}:${String(answer).trim().toUpperCase()}`).digest('base64url');
-function createCaptcha(){
-  const alphabet='ABCDEFGHJKLMNPQRSTUVWXYZ23456789',answer=Array.from(randomBytes(6),byte=>alphabet[byte%alphabet.length]).join(''),nonce=randomBytes(12).toString('base64url'),expires=Date.now()+300000,hash=captchaHash(nonce,answer),value=`${expires}.${nonce}.${hash}`,token=`${value}.${sign(`captcha:${value}`)}`;
-  const noise=Array.from(randomBytes(20),byte=>`<circle cx="${byte%300}" cy="${12+(byte*7)%60}" r="${1+byte%3}" fill="#${byte%2?'b9d4ff':'8aa9d6'}"/>`).join('');
-  const letters=[...answer].map((letter,index)=>`<text x="${35+index*42}" y="55" transform="rotate(${(randomBytes(1)[0]%17)-8} ${35+index*42} 55)">${letter}</text>`).join('');
-  const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="300" height="76" viewBox="0 0 300 76"><rect width="300" height="76" rx="8" fill="#eef4ff"/>${noise}<path d="M0 26 Q75 5 150 31 T300 22 M0 58 Q80 35 160 56 T300 48" fill="none" stroke="#7c9ac8" stroke-width="2" opacity=".65"/><g font-family="Arial,sans-serif" font-size="38" font-weight="800" fill="#10285a" letter-spacing="5">${letters}</g></svg>`;
-  return {token,image:`data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`};
-}
-function validCaptcha(token,answer){
-  try{const parts=String(token||'').split('.');if(parts.length!==4||!sessionSecret())return false;const[expires,nonce,hash,signature]=parts,value=`${expires}.${nonce}.${hash}`;return Number(expires)>Date.now()&&secureEqual(signature,sign(`captcha:${value}`))&&secureEqual(hash,captchaHash(nonce,answer))}catch{return false}
-}
 function stream(file,res,cache='no-cache'){if(!existsSync(file)){res.writeHead(404);return res.end('Not found')}res.writeHead(200,{'content-type':types[extname(file).toLowerCase()]||'application/octet-stream','cache-control':cache});createReadStream(file).pipe(res)}
 
 function syncOfferPricing(pathname,html){
@@ -198,7 +187,6 @@ function syncOfferPricing(pathname,html){
 }
 
 async function api(req,res,url){
-  if(req.method==='GET'&&url.pathname==='/api/captcha')return json(res,200,createCaptcha());
   if(['GET','POST'].includes(req.method)&&url.pathname==='/api/unsubscribe'){const email=String(url.searchParams.get('email')||'').trim().toLowerCase(),token=String(url.searchParams.get('token')||''),expected=email?createHmac('sha256',process.env.SESSION_SECRET||process.env.CRON_SECRET).update(email).digest('base64url'):'';if(!email||!secureEqual(token,expected))return json(res,400,{error:'Invalid unsubscribe link'});await run('UPDATE leads SET unsubscribed=TRUE,email_consent=FALSE,updated_at=$1 WHERE LOWER(email)=$2',[now(),email]);if(req.method==='POST')return json(res,200,{ok:true});res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store'});return res.end('<!doctype html><meta name="viewport" content="width=device-width"><title>Unsubscribed</title><main style="max-width:560px;margin:12vh auto;padding:30px;font:18px Arial;text-align:center"><h1>You are unsubscribed</h1><p>You will no longer receive marketing emails from this offer.</p></main>')}
   if(req.method==='GET'&&url.pathname==='/api/cron/email'){const supplied=req.headers.authorization||'',expected=`Bearer ${process.env.CRON_SECRET||''}`;if(!process.env.CRON_SECRET||!secureEqual(supplied,expected))return json(res,401,{error:'Unauthorized'});return json(res,200,{ok:true,processed:await processDueMessages()})}
   if(req.method==='POST'&&url.pathname==='/api/member/setup'){const input=await body(req),email=String(input.email||'').trim().toLowerCase(),password=String(input.password||'');if(!email||password.length<8)return json(res,400,{error:'Enter your purchase email and a password of at least 8 characters'});const lead=await one("SELECT l.* FROM leads l WHERE LOWER(l.email)=$1 AND EXISTS(SELECT 1 FROM orders o WHERE o.lead_id=l.id AND o.status='paid')",[email]);if(!lead)return json(res,403,{error:'No approved MoneyLabs purchase was found for that email'});if(await one('SELECT id FROM getqlabs_member_accounts WHERE email=$1 OR lead_id=$2',[email,lead.id]))return json(res,409,{error:'An account already exists. Sign in instead.'});const account=await one('INSERT INTO getqlabs_member_accounts(lead_id,email,password_hash,last_login_at) VALUES($1,$2,$3,NOW()) RETURNING *',[lead.id,email,hashPassword(password)]),activityId=await startMemberActivity(account.id);setMemberSession(req,res,account.id,activityId);return json(res,201,{ok:true})}
@@ -212,7 +200,6 @@ async function api(req,res,url){
     if(validationError)return json(res,400,{error:validationError});
     if(!input.consent)return json(res,400,{error:'Payment authorization is required'});
     if(!input.opaqueData?.dataDescriptor||!input.opaqueData?.dataValue)return json(res,400,{error:'Secure card token is required'});
-    if(!validCaptcha(input.captchaToken,input.captchaAnswer))return json(res,400,{error:'The security code is incorrect or expired. Refresh it and try again'});
     let product;try{product=getProduct(input.product)}catch(error){return json(res,400,{error:error.message})}
     if(product.id!=='front')return json(res,400,{error:'Initial checkout product is invalid'});
     const ip=clientIp(req),ipHash=paymentIpHash(req),result=await upsertLead({...input,ip,source:'checkout',email_consent:false,sms_consent:false}),lead=result.lead;
