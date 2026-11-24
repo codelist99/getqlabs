@@ -5,7 +5,7 @@ import { dirname, extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, createHmac, timingSafeEqual, randomBytes, scryptSync } from 'node:crypto';
 import { upsertLead, addEvent, scheduleAutomations, one, many, run, ready } from './lib/database.mjs';
-import { processDueMessages } from './lib/automation.mjs';
+import { processDueMessages, sendPurchaseEmail } from './lib/automation.mjs';
 import { getProduct, products } from './lib/products.mjs';
 import { parseJvzooNotification } from './lib/jvzoo.mjs';
 import { chargeOpaque, chargeProfile, refundOrVoid, getTransactionDetails, getRecentRefundTransactions, getSettledTransactionDiagnostics } from './lib/authorize-net.mjs';
@@ -240,7 +240,7 @@ async function api(req,res,url){
       await finishPaymentAttempt(attempt.id,'approved',payment.responseCode,'Approved');
       await run("UPDATE orders SET status='paid',gateway='authorize_net',transaction_id=$1,response_code=$2,response_message='Approved',updated_at=$3 WHERE id=$4",[payment.transactionId,payment.responseCode,now(),order.id]);
       if(payment.customerProfileId&&payment.paymentProfileId)await run(`INSERT INTO gateway_profiles(lead_id,gateway,customer_profile_id,payment_profile_id,created_at,updated_at) VALUES($1,'authorize_net',$2,$3,$4,$4) ON CONFLICT(lead_id) DO UPDATE SET gateway='authorize_net',customer_profile_id=excluded.customer_profile_id,payment_profile_id=excluded.payment_profile_id,updated_at=excluded.updated_at`,[lead.id,payment.customerProfileId,payment.paymentProfileId,now()]);
-      await addEvent(lead.id,'sale',{value:product.amount,currency:'USD',product_id:product.id,transaction_id:payment.transactionId,metadata:{gateway:'authorize_net'}});await scheduleAutomations(lead,'conversion');setSession(req,res,lead.id);
+      await addEvent(lead.id,'sale',{value:product.amount,currency:'USD',product_id:product.id,transaction_id:payment.transactionId,metadata:{gateway:'authorize_net'}});await scheduleAutomations(lead,'conversion');await sendPurchaseEmail(lead,payment.transactionId);setSession(req,res,lead.id);
       return json(res,200,{ok:true,next:product.next,orderId:Number(order.id)});
     }catch(error){
       await finishPaymentAttempt(attempt.id,'declined',error.code,error.message);
@@ -293,7 +293,7 @@ async function api(req,res,url){
           VALUES($1,$2,$3,$4,$5,'paid',$6,'JVZOO','JVZoo sale','jvzoo',NOW(),NOW())
           ON CONFLICT(lead_id,product_id) DO UPDATE SET product_name=excluded.product_name,amount=excluded.amount,currency=excluded.currency,status='paid',transaction_id=excluded.transaction_id,response_code='JVZOO',response_message='JVZoo sale',gateway='jvzoo',updated_at=NOW() RETURNING *`,[result.lead.id,notification.product.id,notification.product.name,notification.amount,notification.currency,notification.transactionId]))[0];
         const added=await addEvent(result.lead.id,'sale',{value:notification.amount,currency:notification.currency,product_id:notification.product.id,transaction_id:notification.transactionId,metadata:input});
-        if(added)await scheduleAutomations(result.lead,'conversion');
+        if(added){await scheduleAutomations(result.lead,'conversion');if(notification.product.id==='front')await sendPurchaseEmail(result.lead,notification.transactionId)}
       }else if(notification.eventType==='refund'){
         if(!order)return json(res,404,{error:'Original JVZoo order not found'});
         const refundId=`jvzoo-refund-${notification.transactionId}`;
