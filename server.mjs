@@ -225,7 +225,11 @@ async function api(req,res,url){
     if(product.id!=='front')return json(res,400,{error:'Initial checkout product is invalid'});
     const ip=clientIp(req),ipHash=paymentIpHash(req),result=await upsertLead({...input,ip,source:'checkout',email_consent:false,sms_consent:false}),lead=result.lead;
     let order=await one('SELECT * FROM orders WHERE lead_id=$1 AND product_id=$2',[lead.id,product.id]);
-    if(order?.status==='paid'){setSession(req,res,lead.id);return json(res,200,{ok:true,next:product.next,orderId:Number(order.id)})}
+    if(order?.status==='paid'){
+      const profile=await one("SELECT id FROM gateway_profiles WHERE lead_id=$1 AND gateway='authorize_net'",[lead.id]);
+      setSession(req,res,lead.id);
+      return json(res,200,{ok:true,next:profile?product.next:'/thankyou',orderId:Number(order.id)});
+    }
     if(await paymentGuard({leadId:lead.id,ipHash})){
       await run(`INSERT INTO payment_attempts(lead_id,order_id,gateway,product_id,amount,status,response_code,response_message,ip_hash) VALUES($1,$2,'authorize_net',$3,$4,'blocked','velocity','Payment velocity limit reached',$5)`,[lead.id,order?.id||null,product.id,product.amount,ipHash]);
       return json(res,429,{error:'For your security, payment attempts are temporarily paused. Please wait 30 minutes or contact support.'});
@@ -244,12 +248,13 @@ async function api(req,res,url){
     }
     await finishPaymentAttempt(attempt.id,'approved',payment.responseCode,'Approved');
     await run("UPDATE orders SET status='paid',gateway='authorize_net',transaction_id=$1,response_code=$2,response_message='Approved',updated_at=$3 WHERE id=$4",[payment.transactionId,payment.responseCode,now(),order.id]);
+    let profileSaved=false;
     try{
-      if(payment.customerProfileId&&payment.paymentProfileId)await run(`INSERT INTO gateway_profiles(lead_id,gateway,customer_profile_id,payment_profile_id,created_at,updated_at) VALUES($1,'authorize_net',$2,$3,$4,$4) ON CONFLICT(lead_id) DO UPDATE SET gateway='authorize_net',customer_profile_id=excluded.customer_profile_id,payment_profile_id=excluded.payment_profile_id,updated_at=excluded.updated_at`,[lead.id,payment.customerProfileId,payment.paymentProfileId,now()]);
+      if(payment.customerProfileId&&payment.paymentProfileId){await run(`INSERT INTO gateway_profiles(lead_id,gateway,customer_profile_id,payment_profile_id,created_at,updated_at) VALUES($1,'authorize_net',$2,$3,$4,$4) ON CONFLICT(lead_id) DO UPDATE SET gateway='authorize_net',customer_profile_id=excluded.customer_profile_id,payment_profile_id=excluded.payment_profile_id,updated_at=excluded.updated_at`,[lead.id,payment.customerProfileId,payment.paymentProfileId,now()]);profileSaved=true}
       await addEvent(lead.id,'sale',{value:product.amount,currency:'USD',product_id:product.id,transaction_id:payment.transactionId,metadata:{gateway:'authorize_net'}});await scheduleAutomations(lead,'conversion');await sendPurchaseEmail(lead,payment.transactionId);setSession(req,res,lead.id);
     }catch(error){console.error('Post-payment fulfillment failed',error)}
     setSession(req,res,lead.id);
-    return json(res,200,{ok:true,next:product.next,orderId:Number(order.id)});
+    return json(res,200,{ok:true,next:profileSaved?product.next:'/thankyou',orderId:Number(order.id)});
   }
   if(req.method==='POST'&&url.pathname==='/api/purchase'){
     const session=readSession(req);if(!session)return json(res,401,{error:'Your secure checkout session expired. Please complete the initial checkout again.'});
@@ -299,10 +304,16 @@ async function api(req,res,url){
       if(!order?.transaction_id)return json(res,404,{error:'Approved Authorize.Net order not found'});
       const saved=await one('SELECT id FROM gateway_profiles WHERE lead_id=$1',[order.lead_id]);
       if(saved)return json(res,200,{ok:true,repaired:false});
-      const profile=await createProfileFromTransaction(order.transaction_id);
-      if(!profile.customerProfileId||!profile.paymentProfileId)return json(res,502,{error:'Authorize.Net did not return a saved payment profile'});
-      await run(`INSERT INTO gateway_profiles(lead_id,gateway,customer_profile_id,payment_profile_id,created_at,updated_at) VALUES($1,'authorize_net',$2,$3,NOW(),NOW()) ON CONFLICT(lead_id) DO UPDATE SET gateway='authorize_net',customer_profile_id=excluded.customer_profile_id,payment_profile_id=excluded.payment_profile_id,updated_at=NOW()`,[order.lead_id,profile.customerProfileId,profile.paymentProfileId]);
-      return json(res,200,{ok:true,repaired:true});
+      let repaired=false,profileWarning='';
+      try{
+        const profile=await createProfileFromTransaction(order.transaction_id);
+        if(!profile.customerProfileId||!profile.paymentProfileId)throw Error('Authorize.Net did not return a saved payment profile');
+        await run(`INSERT INTO gateway_profiles(lead_id,gateway,customer_profile_id,payment_profile_id,created_at,updated_at) VALUES($1,'authorize_net',$2,$3,NOW(),NOW()) ON CONFLICT(lead_id) DO UPDATE SET gateway='authorize_net',customer_profile_id=excluded.customer_profile_id,payment_profile_id=excluded.payment_profile_id,updated_at=NOW()`,[order.lead_id,profile.customerProfileId,profile.paymentProfileId]);
+        repaired=true;
+      }catch(error){profileWarning=error.message}
+      const lead=await one('SELECT * FROM leads WHERE id=$1',[order.lead_id]);
+      const emailSent=await sendPurchaseEmail(lead,order.transaction_id);
+      return json(res,200,{ok:true,repaired,emailSent,profileWarning});
     }
     if(req.method==='POST'&&url.pathname==='/api/admin/member-admin'){const input=await body(req),email=String(input.email||'').trim().toLowerCase(),password=String(input.password||'');if(!email||password.length<8)return json(res,400,{error:'Email and password required'});const account=await one(`INSERT INTO getqlabs_member_accounts(email,password_hash,is_admin) VALUES($1,$2,TRUE) ON CONFLICT(email) DO UPDATE SET password_hash=excluded.password_hash,is_admin=TRUE,updated_at=NOW() RETURNING id,email,is_admin`,[email,hashPassword(password)]);return json(res,200,{account})}
     if(req.method==='GET'&&url.pathname==='/api/admin/authorize-diagnostics'){const first=await one(`SELECT MIN(created_at) first_at FROM orders`),start=first?.first_at||new Date(Date.now()-30*86400000),report=await getSettledTransactionDiagnostics(new Date(new Date(start).getTime()-86400000),new Date()),orders=await many(`(SELECT transaction_id FROM orders WHERE transaction_id IS NOT NULL ORDER BY updated_at DESC LIMIT 20) UNION ALL (SELECT transaction_id FROM orders WHERE transaction_id IS NOT NULL ORDER BY updated_at ASC LIMIT 20)`),details=[];for(const order of orders){try{details.push(await getTransactionDetails(order.transaction_id))}catch(error){details.push({transactionId:order.transaction_id,error:error.message})}}const gatewayDates=details.map(item=>item.submittedAt).filter(Boolean).sort();return json(res,200,{...report,gatewayDateRange:{first:gatewayDates[0]||null,last:gatewayDates.at(-1)||null},orderStatusCounts:details.reduce((out,item)=>{const key=item.error?`error: ${item.error}`:`${item.transactionType||'unknown'} / ${item.status||'unknown'} / batch:${item.batchId||'none'}`;out[key]=(out[key]||0)+1;return out},{})})}
