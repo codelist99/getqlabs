@@ -80,7 +80,7 @@
       sms_consent:Boolean(data.sms_consent || form.querySelector('[name*=sms_consent]:checked')), landing_page:location.pathname, ...attribution });
   }, true);
   document.addEventListener('click', event => {
-    const link = event.target.closest('a[href*="jvzoo.com"],a[href*="/b/"]');
+    const link = event.target.closest('a[href*="/buy/"]');
     if (!link) return;
     send('/api/events', { type:'checkout_click', page:location.pathname, product_id:link.href, ...context });
     const oto = location.pathname.match(/^\/oto([1-7])\/?$/);

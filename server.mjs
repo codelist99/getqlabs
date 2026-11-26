@@ -7,7 +7,6 @@ import { createHash, createHmac, timingSafeEqual, randomBytes, scryptSync } from
 import { upsertLead, addEvent, scheduleAutomations, one, many, run, ready } from './lib/database.mjs';
 import { processDueMessages, sendPurchaseEmail } from './lib/automation.mjs';
 import { getProduct, products } from './lib/products.mjs';
-import { parseJvzooNotification } from './lib/jvzoo.mjs';
 import { chargeOpaque, chargeProfile, refundOrVoid, getTransactionDetails, getRecentRefundTransactions, getSettledTransactionDiagnostics } from './lib/authorize-net.mjs';
 import { chargeToken, chargeVault, refundTransaction, getNmiReturnTransactions } from './lib/nmi.mjs';
 import { chargebackOccurredAt, getAllChargebacks } from './lib/zen-dashboard.mjs';
@@ -279,33 +278,6 @@ async function api(req,res,url){
   }
   if(req.method==='POST'&&url.pathname==='/api/leads'){const input=await body(req);input.ip=req.headers['x-forwarded-for']?.split(',')[0]||req.socket.remoteAddress||'';const result=await upsertLead(input);await addEvent(result.lead.id,'opt_in',{page:input.landing_page,metadata:{source:input.source||'website'}});if(result.created)await scheduleAutomations(result.lead);return json(res,201,{ok:true,id:Number(result.lead.id)})}
   if(req.method==='POST'&&url.pathname==='/api/events'){const input=await body(req),allowed=new Set(['page_view','checkout_click','checkout_start','step2_webinar_click','video_unmute','video_25','video_50','video_75','video_100']);if(!allowed.has(input.type))return json(res,400,{error:'Unsupported event'});await addEvent(null,input.type,{page:input.page,product_id:input.product_id,metadata:{aid:input.aid,tid:input.tid,utm_source:input.utm_source,utm_campaign:input.utm_campaign,session_id:String(input.session_id||'').slice(0,80),device:String(input.device||'').slice(0,20)}});return json(res,201,{ok:true})}
-  if(req.method==='POST'&&url.pathname==='/api/webhooks/jvzoo'){
-    const supplied=url.searchParams.get('secret')||req.headers['x-webhook-secret'];
-    if(!process.env.WEBHOOK_SECRET||!secureEqual(supplied,process.env.WEBHOOK_SECRET))return json(res,401,{error:'Invalid webhook secret'});
-    try{
-      const input=await body(req),notification=parseJvzooNotification(input,url.searchParams.get('product'));
-      if(!notification.email)return json(res,400,{error:'Missing customer email'});
-      if(!notification.transactionId)return json(res,400,{error:'Missing transaction id'});
-      const result=await upsertLead({email:notification.email,phone:notification.phone,name:notification.name,first_name:notification.firstName,last_name:notification.lastName,source:'jvzoo',aid:input.affiliate_id||input.caffitid||input.aid,tid:input.tracking_id||input.ctid||input.tid});
-      let order=await one('SELECT * FROM orders WHERE transaction_id=$1 OR (lead_id=$2 AND product_id=$3) ORDER BY id DESC LIMIT 1',[notification.originalTransactionId,result.lead.id,notification.product.id]);
-      if(notification.eventType==='sale'){
-        order=(await run(`INSERT INTO orders(lead_id,product_id,product_name,amount,currency,status,transaction_id,response_code,response_message,gateway,created_at,updated_at)
-          VALUES($1,$2,$3,$4,$5,'paid',$6,'JVZOO','JVZoo sale','jvzoo',NOW(),NOW())
-          ON CONFLICT(lead_id,product_id) DO UPDATE SET product_name=excluded.product_name,amount=excluded.amount,currency=excluded.currency,status='paid',transaction_id=excluded.transaction_id,response_code='JVZOO',response_message='JVZoo sale',gateway='jvzoo',updated_at=NOW() RETURNING *`,[result.lead.id,notification.product.id,notification.product.name,notification.amount,notification.currency,notification.transactionId]))[0];
-        const added=await addEvent(result.lead.id,'sale',{value:notification.amount,currency:notification.currency,product_id:notification.product.id,transaction_id:notification.transactionId,metadata:input});
-        if(added){await scheduleAutomations(result.lead,'conversion');if(notification.product.id==='front')await sendPurchaseEmail(result.lead,notification.transactionId)}
-      }else if(notification.eventType==='refund'){
-        if(!order)return json(res,404,{error:'Original JVZoo order not found'});
-        const refundId=`jvzoo-refund-${notification.transactionId}`;
-        const inserted=(await run(`INSERT INTO refunds(order_id,lead_id,action,amount,status,original_transaction_id,gateway_transaction_id,response_message,created_at,updated_at)
-          VALUES($1,$2,'refund',$3,'succeeded',$4,$5,'JVZoo refund',NOW(),NOW()) ON CONFLICT(gateway_transaction_id) DO NOTHING RETURNING id`,[order.id,order.lead_id,Math.min(notification.amount,Number(order.amount)),order.transaction_id,refundId]))[0];
-        if(inserted){await run(`UPDATE orders SET refunded_amount=LEAST(amount,refunded_amount+$1),refund_status=CASE WHEN refunded_amount+$1>=amount THEN 'refunded' ELSE 'partially_refunded' END,refund_updated_at=NOW(),updated_at=NOW() WHERE id=$2`,[notification.amount,order.id]);await addEvent(order.lead_id,'refund',{value:notification.amount,currency:order.currency,product_id:order.product_id,transaction_id:refundId,metadata:input})}
-      }else{
-        await addEvent(result.lead.id,'chargeback',{value:notification.amount,currency:notification.currency,product_id:notification.product.id,transaction_id:notification.transactionId,metadata:input});
-      }
-      return json(res,200,{ok:true,event:notification.eventType,product:notification.product.id});
-    }catch(error){console.error('JVZoo webhook failed',error);return json(res,400,{error:error.message})}
-  }
   if(req.method==='POST'&&url.pathname==='/api/admin/login'){const input=await body(req);if(!secureEqual(String(input.pin||''),'67'))return json(res,401,{error:'Incorrect PIN'});setAdminSession(req,res);return json(res,200,{ok:true})}
   if(url.pathname.startsWith('/api/admin/')){
     if(!requireAdmin(req,res))return;

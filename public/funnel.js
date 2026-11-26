@@ -1,7 +1,7 @@
 (() => {
   const product = window.QL_PRODUCT || '';
   const next = product === 'oto7' ? '/thankyou' : `/oto${Number(product.slice(3) || 0) + 1}`;
-  const isJvzoo = value => /jvzoo\.com\/b\/|\/buy\//i.test(value || '');
+  const isDirectPurchase = value => /\/buy\//i.test(value || '');
   const isDiscount = value => /coupon=|_downsell/i.test(value || '');
   const purchase = async id => {
     const confirmed = confirm(`Add this ${id.includes('downsell') ? 'discounted ' : ''}upgrade to your order?`);
@@ -14,7 +14,7 @@
     } catch (error) { alert(error.message); }
   };
   const handleDestination = href => {
-    if (!isJvzoo(href)) return false;
+    if (!isDirectPurchase(href)) return false;
     if (product === 'front') location.href = '/checkout?product=front';
     else purchase(product + (isDiscount(href) ? '_downsell' : ''));
     return true;
@@ -25,7 +25,7 @@
     const anchor = event.composedPath().find(node => node?.tagName === 'A') || event.target.closest?.('a');
     if (!anchor) return;
     const href = anchor.getAttribute('href') || '';
-    if (!isJvzoo(href)) return;
+    if (!isDirectPurchase(href)) return;
     event.preventDefault();
     event.stopImmediatePropagation();
     handleDestination(href);
