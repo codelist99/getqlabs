@@ -7,7 +7,7 @@ import { createHash, createHmac, timingSafeEqual, randomBytes, scryptSync } from
 import { upsertLead, addEvent, scheduleAutomations, one, many, run, ready } from './lib/database.mjs';
 import { processDueMessages, sendPurchaseEmail } from './lib/automation.mjs';
 import { getProduct, products } from './lib/products.mjs';
-import { chargeOpaque, chargeProfile, refundOrVoid, getTransactionDetails, getRecentRefundTransactions, getSettledTransactionDiagnostics } from './lib/authorize-net.mjs';
+import { chargeOpaque, chargeProfile, createProfileFromTransaction, refundOrVoid, getTransactionDetails, getRecentRefundTransactions, getSettledTransactionDiagnostics } from './lib/authorize-net.mjs';
 import { chargeToken, chargeVault, refundTransaction, getNmiReturnTransactions } from './lib/nmi.mjs';
 import { chargebackOccurredAt, getAllChargebacks } from './lib/zen-dashboard.mjs';
 
@@ -234,18 +234,22 @@ async function api(req,res,url){
     if(order)await run("UPDATE orders SET status='pending',gateway='authorize_net',response_message='',updated_at=$1 WHERE id=$2",[stamp,order.id]);
     else order=(await run("INSERT INTO orders(lead_id,product_id,product_name,amount,status,gateway,created_at,updated_at) VALUES($1,$2,$3,$4,$5,'authorize_net',$6,$6) RETURNING id",[lead.id,product.id,product.name,product.amount,'pending',stamp]))[0];
     const attempt=await startPaymentAttempt({leadId:lead.id,orderId:order.id,product,ipHash});
+    let payment;
     try{
-      const payment=await chargeOpaque({product,opaqueData:input.opaqueData,customer:input,invoice:`ML-${order.id}`});
-      await finishPaymentAttempt(attempt.id,'approved',payment.responseCode,'Approved');
-      await run("UPDATE orders SET status='paid',gateway='authorize_net',transaction_id=$1,response_code=$2,response_message='Approved',updated_at=$3 WHERE id=$4",[payment.transactionId,payment.responseCode,now(),order.id]);
-      if(payment.customerProfileId&&payment.paymentProfileId)await run(`INSERT INTO gateway_profiles(lead_id,gateway,customer_profile_id,payment_profile_id,created_at,updated_at) VALUES($1,'authorize_net',$2,$3,$4,$4) ON CONFLICT(lead_id) DO UPDATE SET gateway='authorize_net',customer_profile_id=excluded.customer_profile_id,payment_profile_id=excluded.payment_profile_id,updated_at=excluded.updated_at`,[lead.id,payment.customerProfileId,payment.paymentProfileId,now()]);
-      await addEvent(lead.id,'sale',{value:product.amount,currency:'USD',product_id:product.id,transaction_id:payment.transactionId,metadata:{gateway:'authorize_net'}});await scheduleAutomations(lead,'conversion');await sendPurchaseEmail(lead,payment.transactionId);setSession(req,res,lead.id);
-      return json(res,200,{ok:true,next:product.next,orderId:Number(order.id)});
+      payment=await chargeOpaque({product,opaqueData:input.opaqueData,customer:input,invoice:`ML-${order.id}`});
     }catch(error){
       await finishPaymentAttempt(attempt.id,'declined',error.code,error.message);
       await run("UPDATE orders SET status='declined',response_code=$1,response_message=$2,updated_at=$3 WHERE id=$4",[error.code||'',String(error.message).slice(0,500),now(),order.id]);
       return json(res,402,{error:error.message});
     }
+    await finishPaymentAttempt(attempt.id,'approved',payment.responseCode,'Approved');
+    await run("UPDATE orders SET status='paid',gateway='authorize_net',transaction_id=$1,response_code=$2,response_message='Approved',updated_at=$3 WHERE id=$4",[payment.transactionId,payment.responseCode,now(),order.id]);
+    try{
+      if(payment.customerProfileId&&payment.paymentProfileId)await run(`INSERT INTO gateway_profiles(lead_id,gateway,customer_profile_id,payment_profile_id,created_at,updated_at) VALUES($1,'authorize_net',$2,$3,$4,$4) ON CONFLICT(lead_id) DO UPDATE SET gateway='authorize_net',customer_profile_id=excluded.customer_profile_id,payment_profile_id=excluded.payment_profile_id,updated_at=excluded.updated_at`,[lead.id,payment.customerProfileId,payment.paymentProfileId,now()]);
+      await addEvent(lead.id,'sale',{value:product.amount,currency:'USD',product_id:product.id,transaction_id:payment.transactionId,metadata:{gateway:'authorize_net'}});await scheduleAutomations(lead,'conversion');await sendPurchaseEmail(lead,payment.transactionId);setSession(req,res,lead.id);
+    }catch(error){console.error('Post-payment fulfillment failed',error)}
+    setSession(req,res,lead.id);
+    return json(res,200,{ok:true,next:product.next,orderId:Number(order.id)});
   }
   if(req.method==='POST'&&url.pathname==='/api/purchase'){
     const session=readSession(req);if(!session)return json(res,401,{error:'Your secure checkout session expired. Please complete the initial checkout again.'});
@@ -289,6 +293,16 @@ async function api(req,res,url){
     if(req.method==='GET'&&url.pathname==='/api/admin/system-audit'){
       const identity=await one(`SELECT current_database() database,current_user db_user`),orderProducts=await many(`SELECT product_id,product_name,MIN(amount) min_amount,MAX(amount) max_amount,COUNT(*)::int records FROM orders GROUP BY 1,2 ORDER BY 1,2`),databaseFingerprint=createHash('sha256').update(process.env.DATABASE_URL||'missing').digest('hex').slice(0,16);
       return json(res,200,{offer:'getqlabs',gateway:'authorize_net',legacyGateway:'nmi',database:{...identity,fingerprint:databaseFingerprint},catalog:products,orderProducts});
+    }
+    if(req.method==='POST'&&url.pathname==='/api/admin/repair-authorize-profile'){
+      const input=await body(req),order=await one("SELECT id,lead_id,transaction_id FROM orders WHERE id=$1 AND status='paid' AND gateway='authorize_net'",[Number(input.order_id)]);
+      if(!order?.transaction_id)return json(res,404,{error:'Approved Authorize.Net order not found'});
+      const saved=await one('SELECT id FROM gateway_profiles WHERE lead_id=$1',[order.lead_id]);
+      if(saved)return json(res,200,{ok:true,repaired:false});
+      const profile=await createProfileFromTransaction(order.transaction_id);
+      if(!profile.customerProfileId||!profile.paymentProfileId)return json(res,502,{error:'Authorize.Net did not return a saved payment profile'});
+      await run(`INSERT INTO gateway_profiles(lead_id,gateway,customer_profile_id,payment_profile_id,created_at,updated_at) VALUES($1,'authorize_net',$2,$3,NOW(),NOW()) ON CONFLICT(lead_id) DO UPDATE SET gateway='authorize_net',customer_profile_id=excluded.customer_profile_id,payment_profile_id=excluded.payment_profile_id,updated_at=NOW()`,[order.lead_id,profile.customerProfileId,profile.paymentProfileId]);
+      return json(res,200,{ok:true,repaired:true});
     }
     if(req.method==='POST'&&url.pathname==='/api/admin/member-admin'){const input=await body(req),email=String(input.email||'').trim().toLowerCase(),password=String(input.password||'');if(!email||password.length<8)return json(res,400,{error:'Email and password required'});const account=await one(`INSERT INTO getqlabs_member_accounts(email,password_hash,is_admin) VALUES($1,$2,TRUE) ON CONFLICT(email) DO UPDATE SET password_hash=excluded.password_hash,is_admin=TRUE,updated_at=NOW() RETURNING id,email,is_admin`,[email,hashPassword(password)]);return json(res,200,{account})}
     if(req.method==='GET'&&url.pathname==='/api/admin/authorize-diagnostics'){const first=await one(`SELECT MIN(created_at) first_at FROM orders`),start=first?.first_at||new Date(Date.now()-30*86400000),report=await getSettledTransactionDiagnostics(new Date(new Date(start).getTime()-86400000),new Date()),orders=await many(`(SELECT transaction_id FROM orders WHERE transaction_id IS NOT NULL ORDER BY updated_at DESC LIMIT 20) UNION ALL (SELECT transaction_id FROM orders WHERE transaction_id IS NOT NULL ORDER BY updated_at ASC LIMIT 20)`),details=[];for(const order of orders){try{details.push(await getTransactionDetails(order.transaction_id))}catch(error){details.push({transactionId:order.transaction_id,error:error.message})}}const gatewayDates=details.map(item=>item.submittedAt).filter(Boolean).sort();return json(res,200,{...report,gatewayDateRange:{first:gatewayDates[0]||null,last:gatewayDates.at(-1)||null},orderStatusCounts:details.reduce((out,item)=>{const key=item.error?`error: ${item.error}`:`${item.transactionType||'unknown'} / ${item.status||'unknown'} / batch:${item.batchId||'none'}`;out[key]=(out[key]||0)+1;return out},{})})}
